@@ -10,7 +10,12 @@ import {
   CreateReportInput,
   ReportFilter,
 } from './types';
-import { getSupabaseAdminClient, dispatchReportToVpsQueue } from './supabase';
+import {
+  getSupabaseAdminClient,
+  dispatchReportToVpsQueue,
+  fetchReportFromVps,
+  fetchReportsFromVps,
+} from './supabase';
 
 // ==============================================================================
 // 1. ENVIRONMENT & CONNECTION DETECTION
@@ -997,8 +1002,30 @@ export async function getReports(filter?: ReportFilter): Promise<Report[]> {
     }
   }
 
-  // Fallback In-Memory Store
+  // Fallback In-Memory & VPS Persistent Store
   const store = getMemoryStore();
+
+  // Merge any newly enqueued reports from VPS persistent repository
+  try {
+    const vpsReports = await fetchReportsFromVps();
+    if (vpsReports && Array.isArray(vpsReports) && vpsReports.length > 0) {
+      const existingIds = new Set(store.reports.map((r) => r.id));
+      for (const vr of vpsReports) {
+        if (!existingIds.has(vr.id)) {
+          store.reports.unshift(vr);
+          existingIds.add(vr.id);
+        } else {
+          const idx = store.reports.findIndex((r) => r.id === vr.id);
+          if (idx !== -1 && vr.updated_at && (!store.reports[idx].updated_at || vr.updated_at > store.reports[idx].updated_at)) {
+            store.reports[idx] = { ...store.reports[idx], ...vr };
+          }
+        }
+      }
+    }
+  } catch (e) {
+    // Graceful fallback to memory store
+  }
+
   let reports = [...store.reports];
 
   if (filter?.status && filter.status !== 'SEMUA') {
@@ -1071,6 +1098,24 @@ export async function getReportById(
     rawReport = store.reports.find((r) => r.id === id) || null;
     if (rawReport && userRole === 'ADMIN') {
       rawForensics = store.forensics.find((f) => f.report_id === id) || null;
+    }
+  }
+
+  // Fallback to VPS persistent repository
+  if (!rawReport) {
+    try {
+      const vpsData = await fetchReportFromVps(id);
+      if (vpsData?.report) {
+        rawReport = vpsData.report;
+        rawForensics = vpsData.forensics || null;
+        const store = getMemoryStore();
+        if (rawReport) {
+          store.reports.unshift(rawReport as Report);
+        }
+        if (rawForensics) store.forensics.unshift(rawForensics);
+      }
+    } catch (e) {
+      console.warn('[DB Adapter] Fallback fetch from VPS failed:', e);
     }
   }
 
@@ -1304,6 +1349,15 @@ export async function createReport(data: CreateReportInput): Promise<{
     temporalContext: data.temporalContext || 'SEDANG_BERLANGSUNG',
     latitude: data.latitude,
     longitude: data.longitude,
+    addressRoad: data.addressRoad,
+    addressSubdistrict: data.addressSubdistrict,
+    addressDistrict: data.addressDistrict,
+    addressCity: data.addressCity,
+    addressProvince: data.addressProvince,
+    locationLandmark: data.locationLandmark,
+    reporterTokenHash,
+    status: 'BARU',
+    forensics: newForensics,
   });
 
   return {

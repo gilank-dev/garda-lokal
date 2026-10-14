@@ -71,6 +71,15 @@ export async function dispatchReportToVpsQueue(jobData: {
   temporalContext: string;
   latitude: number;
   longitude: number;
+  addressRoad?: string | null;
+  addressSubdistrict?: string | null;
+  addressDistrict?: string | null;
+  addressCity?: string | null;
+  addressProvince?: string | null;
+  locationLandmark?: string | null;
+  reporterTokenHash?: string | null;
+  status?: string;
+  forensics?: any;
 }): Promise<{ success: boolean; status: number; message: string; data?: any }> {
   const webhookUrl = process.env.VPS_QUEUE_WEBHOOK_URL || 'http://5.22.209.52:4000/api/queue-report';
   const { headers, rawBody } = signVpsWebhookPayload(jobData);
@@ -109,7 +118,65 @@ export async function dispatchReportToVpsQueue(jobData: {
     return {
       success: false,
       status: 503,
-      message: `VPS tidak dapat dijangkau (${err.name || 'Connection Error'}). Laporan tetap tersimpan di Supabase dengan status antrean lokal.`,
+      message: `VPS tidak dapat dijangkau (${err.name || 'Connection Error'}). Laporan tetap tersimpan di database lokal.`,
     };
   }
 }
+
+// 5. FETCH SINGLE REPORT FROM VPS PERSISTENT REPOSITORY
+export async function fetchReportFromVps(reportId: string): Promise<{ report: any; forensics: any } | null> {
+  const webhookUrl = process.env.VPS_QUEUE_WEBHOOK_URL || 'http://5.22.209.52:4000/api/queue-report';
+  const baseUrl = webhookUrl.replace(/\/api\/queue-report\/?$/, '');
+  const url = `${baseUrl}/api/reports/${reportId}`;
+
+  const sharedSecret = process.env.SHARED_VPS_SECRET || 'garda_secret_2026_dev';
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const signature = crypto
+    .createHmac('sha256', sharedSecret)
+    .update(`${timestamp}.`)
+    .digest('hex');
+
+  try {
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'X-Garda-Timestamp': timestamp,
+        'X-Garda-Signature': signature,
+      },
+      signal: AbortSignal.timeout(4000),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      return data;
+    }
+    return null;
+  } catch (err: any) {
+    console.warn(`[VPS Fetch Error] Could not fetch report ${reportId} from VPS:`, err.message);
+    return null;
+  }
+}
+
+// 6. FETCH ALL REPORTS FROM VPS PERSISTENT REPOSITORY
+export async function fetchReportsFromVps(): Promise<any[] | null> {
+  const webhookUrl = process.env.VPS_QUEUE_WEBHOOK_URL || 'http://5.22.209.52:4000/api/queue-report';
+  const baseUrl = webhookUrl.replace(/\/api\/queue-report\/?$/, '');
+  const url = `${baseUrl}/api/reports`;
+
+  try {
+    const res = await fetch(url, {
+      method: 'GET',
+      signal: AbortSignal.timeout(4000),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      return data.reports || null;
+    }
+    return null;
+  } catch (err: any) {
+    console.warn('[VPS Fetch All Error] Could not fetch reports list from VPS:', err.message);
+    return null;
+  }
+}
+

@@ -1,5 +1,7 @@
 import http from 'node:http';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import { z } from 'zod';
 import { createClient } from '@supabase/supabase-js';
 
@@ -19,6 +21,40 @@ const supabase = (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY)
       auth: { persistSession: false, autoRefreshToken: false }
     })
   : null;
+
+// ==========================================
+// 1B. PERSISTENT FILE-BACKED DB ENGINE
+// ==========================================
+const DATA_DIR = path.join(process.cwd(), 'data');
+const DB_FILE = path.join(DATA_DIR, 'db.json');
+
+if (!fs.existsSync(DATA_DIR)) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+}
+
+let dbState = {
+  reports: {},
+  forensics: {},
+  messages: {},
+  auditLogs: []
+};
+
+if (fs.existsSync(DB_FILE)) {
+  try {
+    dbState = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+    console.log(`[DB Loaded] Loaded ${Object.keys(dbState.reports || {}).length} reports from persistent store.`);
+  } catch (e) {
+    console.warn('[DB Load Warning] Using default DB state:', e.message);
+  }
+}
+
+function persistDb() {
+  try {
+    fs.writeFileSync(DB_FILE, JSON.stringify(dbState, null, 2), 'utf8');
+  } catch (e) {
+    console.error('[DB Persist Error]', e);
+  }
+}
 
 // Multi-tier models for 9Router combo fallback
 const AI_TIERS = [
@@ -317,6 +353,25 @@ function analyzeHeuristicEmergency(rawText, category, temporalContext) {
     }
   }
 
+  // 3B. Update Persistent File-Backed DB
+  if (reportId && dbState.reports[reportId]) {
+    const rep = dbState.reports[reportId];
+    rep.category = aiResult.category;
+    rep.temporal_context = aiResult.temporal_context;
+    rep.urgency_score = aiResult.urgency_score;
+    rep.credibility_score = aiResult.credibility_score;
+    rep.is_potential_hoax = aiResult.is_potential_hoax;
+    rep.hoax_reason = aiResult.hoax_reason;
+    rep.public_masked_summary = aiResult.public_masked_summary;
+    rep.admin_full_narrative = aiResult.admin_full_narrative;
+    rep.extracted_entities = aiResult.extracted_entities;
+    rep.tactical_recommendation = aiResult.tactical_recommendation;
+    rep.status = aiResult.is_potential_hoax ? 'INDIKASI_PALSU' : 'BARU';
+    rep.updated_at = new Date().toISOString();
+    persistDb();
+    console.log(`[Persistent DB Success] Report ${reportId} updated with AI intelligence.`);
+  }
+
   // 4. Bidirectional Sync: Notify Vercel Web App via signed HMAC callback
   const webCallbackUrl = process.env.WEB_CALLBACK_URL || 'https://web-lilac-six-26.vercel.app';
   if (reportId && webCallbackUrl) {
@@ -385,6 +440,15 @@ async function checkRouterConnectivity() {
 // 5. HTTP SERVER WITH TELEMETRY & SECURITY
 // ==========================================
 const server = http.createServer(async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Garda-Timestamp, X-Garda-Signature, X-Reporter-Token');
+
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204);
+    return res.end();
+  }
+
   const clientIp = req.headers['x-forwarded-for']?.toString().split(',')[0].trim() || req.socket.remoteAddress || 'unknown';
 
   // Healthcheck endpoint with enriched telemetry
@@ -409,6 +473,26 @@ const server = http.createServer(async (req, res) => {
       activeTiers: AI_TIERS.map(t => ({ tier: t.tier, model: t.model })),
       timestamp: new Date().toISOString()
     }));
+  }
+
+  // Get all reports from persistent DB
+  if (req.method === 'GET' && req.url === '/api/reports') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({ reports: Object.values(dbState.reports) }));
+  }
+
+  // Get single report from persistent DB
+  const repMatch = req.url.match(/^\/api\/reports\/([a-zA-Z0-9-]+)$/);
+  if (req.method === 'GET' && repMatch) {
+    const rId = repMatch[1];
+    const report = dbState.reports[rId] || null;
+    const forensics = dbState.forensics[rId] || null;
+    if (!report) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'Laporan tidak ditemukan di repositori VPS.' }));
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({ report, forensics }));
   }
 
   // Queue endpoint
@@ -441,10 +525,10 @@ const server = http.createServer(async (req, res) => {
       const clientTimestamp = parseInt(timestampHeader.toString(), 10);
       const currentTimestamp = Math.floor(Date.now() / 1000);
 
-      // Replay attack prevention: max 60 seconds deviation
-      if (Math.abs(currentTimestamp - clientTimestamp) > 60) {
+      // Replay attack prevention: max 120 seconds deviation
+      if (Math.abs(currentTimestamp - clientTimestamp) > 120) {
         res.writeHead(401, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ error: 'Unauthorized: Request timestamp kedaluwarsa (> 60s).' }));
+        return res.end(JSON.stringify({ error: 'Unauthorized: Request timestamp kedaluwarsa (> 120s).' }));
       }
 
       const expectedHmac = crypto
@@ -468,6 +552,41 @@ const server = http.createServer(async (req, res) => {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ error: 'Bad Request: Format JSON tidak valid.' }));
       }
+
+      // 5. Persist report into file-backed state immediately
+      dbState.reports[payload.reportId] = {
+        id: payload.reportId,
+        cluster_parent_id: payload.clusterParentId || null,
+        reporter_token_hash: payload.reporterTokenHash || null,
+        category: payload.category || 'LAINNYA',
+        temporal_context: payload.temporalContext || 'SEDANG_BERLANGSUNG',
+        status: payload.status || 'BARU',
+        urgency_score: payload.urgency_score || (payload.temporalContext === 'SEDANG_BERLANGSUNG' ? 75 : 50),
+        credibility_score: payload.credibility_score || 50,
+        is_potential_hoax: false,
+        hoax_reason: null,
+        raw_reporter_input: payload.rawReporterInput || '',
+        public_masked_summary: payload.publicMaskedSummary || 'Laporan diterima dan sedang dalam antrean verifikasi petugas.',
+        admin_full_narrative: payload.rawReporterInput || '',
+        extracted_entities: null,
+        tactical_recommendation: null,
+        latitude: payload.latitude,
+        longitude: payload.longitude,
+        address_road: payload.addressRoad || null,
+        address_subdistrict: payload.addressSubdistrict || null,
+        address_district: payload.addressDistrict || null,
+        address_city: payload.addressCity || null,
+        address_province: payload.addressProvince || null,
+        location_landmark: payload.locationLandmark || null,
+        cluster_count: 1,
+        created_at: payload.created_at || new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      };
+
+      if (payload.forensics) {
+        dbState.forensics[payload.reportId] = payload.forensics;
+      }
+      persistDb();
 
       const jobId = crypto.randomUUID();
       enqueueJob({
@@ -503,4 +622,5 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(`[Config] 9Router URL: ${ROUTER_URL}`);
   console.log(`[Config] Tiers: ${AI_TIERS.map(t => `${t.tier}:${t.model}`).join(' -> ')}`);
   console.log(`[Config] Supabase Integration: ${supabase ? 'Active' : 'Standby / Local mode'}`);
+  console.log(`[Config] Persistent DB: Active in ${DB_FILE}`);
 });
