@@ -317,6 +317,53 @@ function analyzeHeuristicEmergency(rawText, category, temporalContext) {
     }
   }
 
+  // 4. Bidirectional Sync: Notify Vercel Web App via signed HMAC callback
+  const webCallbackUrl = process.env.WEB_CALLBACK_URL || 'https://web-lilac-six-26.vercel.app';
+  if (reportId && webCallbackUrl) {
+    try {
+      const syncPayload = {
+        category: aiResult.category,
+        temporal_context: aiResult.temporal_context,
+        urgency_score: aiResult.urgency_score,
+        credibility_score: aiResult.credibility_score,
+        is_potential_hoax: aiResult.is_potential_hoax,
+        hoax_reason: aiResult.hoax_reason,
+        public_masked_summary: aiResult.public_masked_summary,
+        admin_full_narrative: aiResult.admin_full_narrative,
+        extracted_entities: aiResult.extracted_entities,
+        tactical_recommendation: aiResult.tactical_recommendation,
+        status: aiResult.is_potential_hoax ? 'INDIKASI_PALSU' : 'BARU',
+      };
+
+      const timestamp = Math.floor(Date.now() / 1000).toString();
+      const rawSyncBody = JSON.stringify(syncPayload);
+      const signature = crypto
+        .createHmac('sha256', SHARED_VPS_SECRET)
+        .update(`${timestamp}.${rawSyncBody}`)
+        .digest('hex');
+
+      const targetEndpoint = `${webCallbackUrl.replace(/\/$/, '')}/api/reports/${reportId}`;
+      const syncRes = await fetch(targetEndpoint, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Garda-Timestamp': timestamp,
+          'X-Garda-Signature': signature,
+        },
+        body: rawSyncBody,
+        signal: AbortSignal.timeout(5000),
+      });
+
+      if (syncRes.ok) {
+        console.log(`[Web Sync Success] Report ${reportId} intelligence pushed to ${targetEndpoint}`);
+      } else {
+        console.warn(`[Web Sync Warning] Push to ${targetEndpoint} returned ${syncRes.status}`);
+      }
+    } catch (syncErr) {
+      console.warn(`[Web Sync Error] Failed to push to ${webCallbackUrl}:`, syncErr.message);
+    }
+  }
+
   return aiResult;
 }
 

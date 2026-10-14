@@ -1407,6 +1407,65 @@ export async function updateReportStatus(
 }
 
 /**
+ * Updates report intelligence fields after asynchronous processing by VPS AI Worker.
+ */
+export async function updateReportIntelligence(
+  id: string,
+  intelligence: {
+    category?: IncidentCategory;
+    temporal_context?: TemporalStatus;
+    urgency_score?: number;
+    credibility_score?: number;
+    is_potential_hoax?: boolean;
+    hoax_reason?: string | null;
+    public_masked_summary?: string;
+    admin_full_narrative?: string;
+    extracted_entities?: any;
+    tactical_recommendation?: string;
+    status?: ReportStatus;
+  }
+): Promise<{ success: boolean; report: Report }> {
+  const isLive = isUsingLiveSupabase();
+  const now = new Date().toISOString();
+
+  if (isLive) {
+    try {
+      const supabase = getSupabaseAdminClient();
+      await supabase
+        .from('reports')
+        .update({
+          ...intelligence,
+          updated_at: now,
+        })
+        .eq('id', id);
+    } catch (err: any) {
+      console.warn('[DB Adapter] Live Supabase intelligence update failed, syncing in-memory store:', err.message);
+    }
+  }
+
+  const store = getMemoryStore();
+  const report = store.reports.find((r) => r.id === id);
+  if (!report) {
+    throw new Error('Laporan tidak ditemukan.');
+  }
+
+  if (intelligence.category) report.category = intelligence.category;
+  if (intelligence.temporal_context) report.temporal_context = intelligence.temporal_context;
+  if (intelligence.urgency_score !== undefined) report.urgency_score = intelligence.urgency_score;
+  if (intelligence.credibility_score !== undefined) report.credibility_score = intelligence.credibility_score;
+  if (intelligence.is_potential_hoax !== undefined) report.is_potential_hoax = intelligence.is_potential_hoax;
+  if (intelligence.hoax_reason !== undefined) report.hoax_reason = intelligence.hoax_reason;
+  if (intelligence.public_masked_summary) report.public_masked_summary = intelligence.public_masked_summary;
+  if (intelligence.admin_full_narrative) report.admin_full_narrative = intelligence.admin_full_narrative;
+  if (intelligence.extracted_entities !== undefined) report.extracted_entities = intelligence.extracted_entities;
+  if (intelligence.tactical_recommendation) report.tactical_recommendation = intelligence.tactical_recommendation;
+  if (intelligence.status) report.status = intelligence.status;
+  report.updated_at = now;
+
+  return { success: true, report };
+}
+
+/**
  * Records an immutable READ_DETAIL action in the audit logs when an admin views a report.
  */
 export async function recordReadAudit(
