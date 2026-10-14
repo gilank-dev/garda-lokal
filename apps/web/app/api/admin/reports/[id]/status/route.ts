@@ -22,7 +22,9 @@ export async function POST(
   const clientIp = forwardedFor ? forwardedFor.split(',')[0].trim() : '127.0.0.1';
 
   try {
-    const { newStatus, mandatoryNote } = await req.json();
+    const body = await req.json();
+    const newStatus = body.newStatus || body.status;
+    const mandatoryNote = body.mandatoryNote || body.note;
 
     if (!newStatus) {
       return NextResponse.json({ error: 'Status baru wajib ditentukan.' }, { status: 400 });
@@ -49,3 +51,6 @@ export async function POST(
     return NextResponse.json({ error: err.message }, { status });
   }
 }
+
+export const PATCH = POST;
+
