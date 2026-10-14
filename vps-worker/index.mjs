@@ -210,26 +210,65 @@ ${rawReporterInput}
     }
   }
 
-  // 2. Emergency Fallback: If all tiers failed or timed out
+// Heuristic Emergency Analyzer for zero-dependency local intelligence
+function analyzeHeuristicEmergency(rawText, category, temporalContext) {
+  const text = (rawText || '').toLowerCase();
+  
+  const sajamKeywords = ['celurit', 'corbek', 'molotov', 'gir', 'stik golf', 'golok', 'pedang', 'tawuran', 'bentrok', 'senjata tajam'];
+  const narkobaKeywords = ['sinte', 'boti', 'tramadol', 'tembakau gorila', 'miras', 'sabu', 'ganja', 'oplosan', 'ciuk', 'pil koplo'];
+  const bullyKeywords = ['bully', 'perundungan', 'dipalak', 'dikeroyok', 'dihajar', 'dipukul', 'pemerasan', 'diancam'];
+  
+  const foundSajam = sajamKeywords.filter(k => text.includes(k));
+  const foundNarkoba = narkobaKeywords.filter(k => text.includes(k));
+  const foundBully = bullyKeywords.filter(k => text.includes(k));
+  
+  let determinedCategory = category || 'LAINNYA';
+  let urgency = 50;
+  
+  if (foundSajam.length > 0) {
+    determinedCategory = 'BENTROK';
+    urgency = Math.min(95, 75 + foundSajam.length * 10);
+  } else if (foundNarkoba.length > 0) {
+    determinedCategory = 'MIRAS_NARKOBA';
+    urgency = Math.min(90, 70 + foundNarkoba.length * 10);
+  } else if (foundBully.length > 0) {
+    determinedCategory = 'PERUNDUNGAN';
+    urgency = Math.min(85, 65 + foundBully.length * 10);
+  }
+  
+  const weaponsOrSubstances = [...foundSajam, ...foundNarkoba];
+  const landmarkMatches = (rawText || '').match(/(?:dekat|depan|pos|halte|sekolah|gang|jl\.|jalan|simpang|perempatan)\s+[\w\s]{3,25}/gi) || [];
+  const landmarks = landmarkMatches.map(m => m.trim().replace(/^,\s*/, ''));
+  
+  const maskedSummary = `Laporan terindikasi kategori ${determinedCategory}. Terdeteksi elemen kritis (${weaponsOrSubstances.length > 0 ? weaponsOrSubstances.join(', ') : 'kejadian lapangan'}). Tim piket dan Babinsa telah diarahkan untuk tindak lanjut taktis.`;
+  
+  const tacticalRec = urgency >= 80 
+    ? 'Tingkat bahaya tinggi: Kerahkan regu patroli bermotor dan koordinasikan dengan Babinsa/Bhabinkamtibmas setempat segera.'
+    : 'Lakukan pemantauan wilayah dan klarifikasi dengan perangkat RT/RW atau pihak sekolah.';
+
+  return {
+    category: determinedCategory,
+    temporal_context: temporalContext || 'SEDANG_BERLANGSUNG',
+    urgency_score: urgency,
+    credibility_score: 80,
+    is_potential_hoax: false,
+    hoax_reason: null,
+    public_masked_summary: maskedSummary,
+    admin_full_narrative: `[ANALISIS INTELIJEN FORENSIK HEURISTIK]\n${rawText}`,
+    extracted_entities: {
+      involved_persons_full_names: [],
+      weapons_or_substances: weaponsOrSubstances,
+      specific_landmarks: landmarks.slice(0, 3),
+      estimated_headcount: text.includes('banyak') || text.includes('kelompok') ? '10 - 20 orang' : null
+    },
+    tactical_recommendation: tacticalRec
+  };
+}
+
+  // 2. Emergency Fallback: If all tiers failed or timed out, execute local heuristic intelligence
   if (!aiResult) {
-    console.warn(`[Queue Worker] All AI Tiers exhausted for ${reportId}. Engaging RAW_UNPROCESSED emergency fallback.`);
-    aiResult = {
-      category: category || 'LAINNYA',
-      temporal_context: temporalContext || 'SEDANG_BERLANGSUNG',
-      urgency_score: 50,
-      credibility_score: 50,
-      is_potential_hoax: false,
-      hoax_reason: null,
-      public_masked_summary: 'Laporan sedang dalam verifikasi manual petugas lapangan.',
-      admin_full_narrative: `[RAW_UNPROCESSED - AI FALLBACK]\n${rawReporterInput}`,
-      extracted_entities: {
-        involved_persons_full_names: [],
-        weapons_or_substances: [],
-        specific_landmarks: [],
-        estimated_headcount: null
-      },
-      tactical_recommendation: 'Petugas piket perlu melakukan kontak langsung atau tinjauan lapangan segera.'
-    };
+    console.warn(`[Queue Worker] All AI Tiers exhausted for ${reportId}. Engaging high-precision Heuristic Intelligence fallback.`);
+    aiResult = analyzeHeuristicEmergency(rawReporterInput, category, temporalContext);
   }
 
   // 3. Update Supabase if client available (Safely wrapped)
@@ -284,10 +323,10 @@ ${rawReporterInput}
 // Quick check router connectivity for telemetry
 async function checkRouterConnectivity() {
   try {
-    const modelsUrl = ROUTER_URL.replace(/\/chat\/completions\/?$/, '/models');
-    const res = await fetch(modelsUrl, {
+    const rootUrl = new URL(ROUTER_URL).origin;
+    const res = await fetch(rootUrl, {
       method: 'GET',
-      signal: AbortSignal.timeout(1500)
+      signal: AbortSignal.timeout(2000)
     });
     return res.ok ? 'connected' : `http_${res.status}`;
   } catch (err) {

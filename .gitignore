@@ -32,3 +32,6 @@ venv/
 # OS Files
 .DS_Store
 Thumbs.db
+
+# Temp
+supabase/.temp/

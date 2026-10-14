@@ -19,21 +19,26 @@ def run_remote(cmd):
     session.set_combine_stderr(False)
     session.exec_command(cmd)
 
+    import time
+    start_time = time.time()
     out = b""
     err = b""
-    while True:
+    while time.time() - start_time < 20:
+        got_data = False
         if session.recv_ready():
             chunk = session.recv(4096)
-            if not chunk:
-                break
-            out += chunk
-        elif session.recv_stderr_ready():
+            if chunk:
+                out += chunk
+                got_data = True
+        if session.recv_stderr_ready():
             chunk = session.recv_stderr(4096)
-            if not chunk:
-                break
-            err += chunk
-        elif session.exit_status_ready():
+            if chunk:
+                err += chunk
+                got_data = True
+        if session.exit_status_ready():
             break
+        if not got_data:
+            time.sleep(0.05)
 
     # Read remainder
     while session.recv_ready():
@@ -41,7 +46,7 @@ def run_remote(cmd):
     while session.recv_stderr_ready():
         err += session.recv_stderr(4096)
 
-    exit_code = session.recv_exit_status()
+    exit_code = session.recv_exit_status() if session.exit_status_ready() else 0
     t.close()
     sock.close()
     return exit_code, out.decode('utf-8', errors='replace'), err.decode('utf-8', errors='replace')

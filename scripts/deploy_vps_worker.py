@@ -66,11 +66,11 @@ def deploy():
 
     print("[5/7] Restarting worker process...")
     cmd_restart = (
-        'pkill -f "node index.mjs" || true; '
+        'pkill -9 -f "index.mjs" || true; '
         'sleep 1; '
-        'cd /home/tugasagama/garda-vps && nohup node index.mjs > worker.log 2>&1 & '
+        'cd /home/tugasagama/garda-vps && nohup /usr/bin/node index.mjs </dev/null >worker.log 2>&1 & '
         'sleep 2; '
-        'ps -ef | grep "node index.mjs" | grep -v grep'
+        'ps -ef | grep "index.mjs" | grep -v grep'
     )
     out_restart = run_command(t, cmd_restart)
     print("  Process status:\n", out_restart.strip())
